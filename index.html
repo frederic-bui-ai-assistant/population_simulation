@@ -42,6 +42,14 @@
   #bubble b{display:block;font-size:11.5px;letter-spacing:.3px;text-transform:uppercase;opacity:.55;margin-bottom:2px}
   #bubble::after{content:"";position:absolute;left:50%;bottom:-7px;width:14px;height:14px;background:#fff;
     transform:translateX(-50%) rotate(45deg);border-radius:2px}
+  .phead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .phead .sub{margin-bottom:12px}
+  #bHide{flex:none;width:30px;height:30px;padding:0;font-size:15px}
+  #panel.collapsed{width:auto}
+  #panel.collapsed > :not(.phead){display:none}
+  #panel.collapsed .phead .sub{display:none}
+  #panel.collapsed .phead h1{margin:0;line-height:30px}
+  #panel.collapsed .phead{align-items:center}
   #zoom{right:14px;top:14px;display:flex;flex-direction:column;gap:6px;padding:8px}
   #zoom button{width:36px;height:36px;padding:0;font-size:18px;flex:none}
   #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px}
@@ -53,8 +61,10 @@
 <div id="err">Impossible de charger Three.js (réseau bloqué ?). Rechargez la page.</div>
 
 <div id="panel" class="card">
-  <h1>Promeneurs</h1>
-  <p class="sub">Simulation Three.js · vue de dessus</p>
+  <div class="phead">
+    <div><h1>Promeneurs</h1><p class="sub">Simulation Three.js · vue de dessus</p></div>
+    <button id="bHide" title="Masquer le menu (touche H)">▾</button>
+  </div>
   <div class="stats">
     <div><b id="sTotal">0</b><span>présents</span></div>
     <div><b id="sWalk">0</b><span>en marche</span></div>
@@ -553,6 +563,13 @@
     $('bFollow').textContent = c.escort ? '✋ Arrêter' : '👣 Suivre';
     say(c);
   });
+  function togglePanel() {
+    const c = $('panel').classList.toggle('collapsed');
+    $('bHide').textContent = c ? '▸' : '▾';
+    $('bHide').title = c ? 'Afficher le menu (touche H)' : 'Masquer le menu (touche H)';
+  }
+  $('bHide').addEventListener('click', togglePanel);
+  addEventListener('keydown', e => { if (e.code === 'KeyH' && !e.ctrlKey && !e.metaKey) togglePanel(); });
   $('bClose').addEventListener('click', () => select(null));
   addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); togglePause(); } });
 
