@@ -69,7 +69,7 @@
     <button id="bPause">⏸ Pause</button>
     <button id="bReset">↻ Recommencer</button>
   </div>
-  <p class="hint">Molette : zoom · Glisser : déplacer la vue · Clic sur un personnage : il s'arrête, vous parle et la caméra le suit · Clic à côté ou « Fermer » : on le lâche</p>
+  <p class="hint">Molette : zoom · Glisser : déplacer la vue · Clic sur un personnage : il s'arrête et vous parle, la caméra le suit · « Suivre » : il repart en continuant de parler · Clic à côté ou « Fermer » : on le lâche</p>
 </div>
 
 <div id="info" class="card" hidden>
@@ -80,6 +80,7 @@
     <dt>Distance parcourue</dt><dd id="iDist">—</dd>
   </dl>
   <div class="row">
+    <button id="bFollow">👣 Suivre</button>
     <button id="bClose">Fermer</button>
   </div>
 </div>
@@ -380,14 +381,16 @@
 
   function stepChar(c, dt) {
     let dx = 0, dz = 0;
+    if (c === selected) { c.talkT -= dt; if (c.talkT <= 0) say(c); }   // change de réplique de temps en temps
     if (c.state === 'walk') {
       const toX = c.tx - c.x, toZ = c.tz - c.z, dist = Math.hypot(toX, toZ);
-      if (dist < 0.6) { c.state = 'idle'; c.timer = rnd(0.6, 4.5); }
+      if (dist < 0.6) {
+        if (c.escort) pickTarget(c);          // en mode « suivre » il enchaîne sans s'arrêter
+        else { c.state = 'idle'; c.timer = rnd(0.6, 4.5); }
+      }
       else { dx = toX / dist; dz = toZ / dist; }
     } else if (c.state === 'talk') {
-      // immobile : il parle au visiteur, et change de réplique de temps en temps
-      c.talkT -= dt;
-      if (c.talkT <= 0) say(c);
+      // immobile : il parle au visiteur
     } else {
       c.timer -= dt;
       if (c.timer <= 0) { pickTarget(c); c.state = 'walk'; c.sT = 0; c.lx = c.x; c.lz = c.z; }
@@ -452,16 +455,15 @@
     c.armL.position.z = -sw * 0.14 * amp; c.armR.position.z = sw * 0.14 * amp;
     c.shoulders.rotation.y = sw * 0.14 * amp;
     const look = c.state === 'idle' ? 0.8 : 0.12;
-    if (c.state === 'talk') {
-      // salue de la main + hoche la tête en parlant
+    if (c === selected) {      // hoche la tête en parlant (même en marchant)
       c.head.rotation.y = Math.sin(simTime * 3.1) * 0.12;
       c.head.rotation.x = Math.sin(simTime * 8) * 0.08;
-      c.armR.position.set(0.5 + 0.07 * Math.sin(simTime * 10), 0, 0.16 + 0.12 * Math.sin(simTime * 10));
     } else {
       c.head.rotation.x = 0;
-      c.armR.position.x = 0.4;
       c.head.rotation.y = Math.sin(simTime * 0.9 + c.seed) * look + Math.sin(simTime * 2.3 + c.seed * 2) * 0.1 * look;
     }
+    if (c.state === 'talk') c.armR.position.set(0.5 + 0.07 * Math.sin(simTime * 10), 0, 0.16 + 0.12 * Math.sin(simTime * 10));   // salue de la main
+    else c.armR.position.x = 0.4;
     c.g.position.set(c.x, 0, c.z);
     c.g.rotation.y = c.face;
 
@@ -513,7 +515,7 @@
   }
   const _v = new THREE.Vector3();
   function placeBubble() {
-    if (!selected || selected.state !== 'talk') { bubble.classList.remove('show'); return; }
+    if (!selected) { bubble.classList.remove('show'); return; }
     _v.set(selected.x, 0, selected.z).project(camera);
     const ppu = innerHeight / (view.halfH * 2);
     const px = (_v.x + 1) / 2 * innerWidth, py = (1 - _v.y) / 2 * innerHeight - (0.95 * ppu + 12);
@@ -523,14 +525,15 @@
   }
 
   function select(c) {
-    if (selected && selected !== c && selected.state === 'talk') { selected.state = 'idle'; selected.timer = 1; }
+    if (selected && selected !== c && (selected.state === 'talk' || selected.escort)) { selected.state = 'idle'; selected.timer = 1; selected.escort = false; }
+    $('bFollow').textContent = '👣 Suivre';
     selected = c;
     ring.visible = !!c;
     $('info').hidden = !c;
     if (!c) { state.follow = false; bubble.classList.remove('show'); return; }
     state.follow = true;   // la caméra suit automatiquement le personnage sélectionné
     // il s'arrête et vous parle
-    c.state = 'talk'; c.vx *= 0.2; c.vz *= 0.2;
+    c.state = 'talk'; c.escort = false; c.vx *= 0.2; c.vz *= 0.2;
     say(c);
     $('iName').textContent = c.name;
     $('iDot').style.background = '#' + c.shirt.toString(16).padStart(6, '0');
@@ -542,6 +545,14 @@
   $('bPause').addEventListener('click', togglePause);
   function togglePause() { state.paused = !state.paused; $('bPause').textContent = state.paused ? '▶ Reprendre' : '⏸ Pause'; }
   $('bReset').addEventListener('click', () => { const n = chars.length; setCount(0); setCount(n); });
+  $('bFollow').addEventListener('click', () => {
+    const c = selected; if (!c) return;
+    c.escort = !c.escort;
+    if (c.escort) { c.state = 'walk'; c.sT = 0; c.lx = c.x; c.lz = c.z; pickTarget(c); }   // il repart en continuant de parler
+    else { c.state = 'talk'; }
+    $('bFollow').textContent = c.escort ? '✋ Arrêter' : '👣 Suivre';
+    say(c);
+  });
   $('bClose').addEventListener('click', () => select(null));
   addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); togglePause(); } });
 
@@ -638,7 +649,7 @@
       let walk = 0; for (const c of chars) if (c.state === 'walk') walk++;
       $('sTotal').textContent = chars.length; $('sWalk').textContent = walk; $('sIdle').textContent = chars.length - walk;
       if (selected) {
-        $('iState').textContent = selected.state === 'walk' ? 'Se promène' : selected.state === 'talk' ? 'Discute avec vous' : 'S’arrête';
+        $('iState').textContent = selected.state === 'walk' ? 'Se promène' : selected.escort ? 'Marche en vous parlant' : selected.state === 'talk' ? 'Discute avec vous' : 'S’arrête';
         $('iSpeed').textContent = (Math.hypot(selected.vx, selected.vz)).toFixed(1) + ' m/s';
         $('iDist').textContent = selected.dist.toFixed(0) + ' m';
       }
