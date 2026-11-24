@@ -35,6 +35,13 @@
   #info dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0 0 10px;font-size:12.5px}
   #info dt{opacity:.6}
   #info dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+  #bubble{position:fixed;left:0;top:0;z-index:5;max-width:230px;padding:9px 12px;border-radius:14px;background:#fff;color:#1b2a20;
+    font-size:13.5px;line-height:1.35;box-shadow:0 6px 20px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .18s;
+    transform:translate(-50%,-100%)}
+  #bubble.show{opacity:1}
+  #bubble b{display:block;font-size:11.5px;letter-spacing:.3px;text-transform:uppercase;opacity:.55;margin-bottom:2px}
+  #bubble::after{content:"";position:absolute;left:50%;bottom:-7px;width:14px;height:14px;background:#fff;
+    transform:translateX(-50%) rotate(45deg);border-radius:2px}
   #zoom{right:14px;top:14px;display:flex;flex-direction:column;gap:6px;padding:8px}
   #zoom button{width:36px;height:36px;padding:0;font-size:18px;flex:none}
   #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px}
@@ -62,7 +69,7 @@
     <button id="bPause">⏸ Pause</button>
     <button id="bReset">↻ Recommencer</button>
   </div>
-  <p class="hint">Molette : zoom · Glisser : déplacer la vue · Clic sur un personnage : le sélectionner</p>
+  <p class="hint">Molette : zoom · Glisser : déplacer la vue · Clic sur un personnage : il s'arrête et vous parle</p>
 </div>
 
 <div id="info" class="card" hidden>
@@ -77,6 +84,8 @@
     <button id="bClose">Fermer</button>
   </div>
 </div>
+
+<div id="bubble"></div>
 
 <div id="zoom" class="card">
   <button id="zIn" title="Zoom avant">+</button>
@@ -376,6 +385,10 @@
       const toX = c.tx - c.x, toZ = c.tz - c.z, dist = Math.hypot(toX, toZ);
       if (dist < 0.6) { c.state = 'idle'; c.timer = rnd(0.6, 4.5); }
       else { dx = toX / dist; dz = toZ / dist; }
+    } else if (c.state === 'talk') {
+      // immobile : il parle au visiteur, et change de réplique de temps en temps
+      c.talkT -= dt;
+      if (c.talkT <= 0) say(c);
     } else {
       c.timer -= dt;
       if (c.timer <= 0) { pickTarget(c); c.state = 'walk'; c.sT = 0; c.lx = c.x; c.lz = c.z; }
@@ -432,14 +445,24 @@
 
     // orientation + animation
     const sp = Math.hypot(c.vx, c.vz);
-    if (sp > 0.12) c.face = angLerp(c.face, Math.atan2(c.vx, c.vz), 1 - Math.exp(-dt * 8));
+    if (c.state === 'talk') c.face = angLerp(c.face, 0, 1 - Math.exp(-dt * 6));   // se tourne vers le bas de l'écran
+    else if (sp > 0.12) c.face = angLerp(c.face, Math.atan2(c.vx, c.vz), 1 - Math.exp(-dt * 8));
     c.phase += sp * dt * 3.2;
     const sw = Math.sin(c.phase), amp = Math.min(sp / 1.4, 1);
     c.footL.position.z = sw * 0.24 * amp; c.footR.position.z = -sw * 0.24 * amp;
     c.armL.position.z = -sw * 0.14 * amp; c.armR.position.z = sw * 0.14 * amp;
     c.shoulders.rotation.y = sw * 0.14 * amp;
     const look = c.state === 'idle' ? 0.8 : 0.12;
-    c.head.rotation.y = Math.sin(simTime * 0.9 + c.seed) * look + Math.sin(simTime * 2.3 + c.seed * 2) * 0.1 * look;
+    if (c.state === 'talk') {
+      // salue de la main + hoche la tête en parlant
+      c.head.rotation.y = Math.sin(simTime * 3.1) * 0.12;
+      c.head.rotation.x = Math.sin(simTime * 8) * 0.08;
+      c.armR.position.set(0.5 + 0.07 * Math.sin(simTime * 10), 0, 0.16 + 0.12 * Math.sin(simTime * 10));
+    } else {
+      c.head.rotation.x = 0;
+      c.armR.position.x = 0.4;
+      c.head.rotation.y = Math.sin(simTime * 0.9 + c.seed) * look + Math.sin(simTime * 2.3 + c.seed * 2) * 0.1 * look;
+    }
     c.g.position.set(c.x, 0, c.z);
     c.g.rotation.y = c.face;
 
@@ -461,11 +484,54 @@
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }));
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05; ring.visible = false; scene.add(ring);
 
+  /* --- dialogue --- */
+  const bubble = $('bubble');
+  function nearby(c, r) { let n = 0; for (const o of chars) if (o !== c && Math.hypot(o.x - c.x, o.z - c.z) < r) n++; return n; }
+  function lines(c) {
+    const n = nearby(c, 7);
+    return [
+      `Salut ! Moi c'est ${c.name} 👋`,
+      `Belle journée pour une promenade, vous ne trouvez pas ?`,
+      `J'ai déjà marché ${c.dist.toFixed(0)} m aujourd'hui. Mes pieds me remercient !`,
+      n > 0 ? `Il y a ${n} personne${n > 1 ? 's' : ''} autour de moi. Ça se bouscule un peu…` : `Tiens, il n'y a personne autour de moi. Le calme, enfin.`,
+      `Vous m'avez vu depuis le ciel ? Je me sens tout petit.`,
+      `La fontaine au centre est magnifique, vous ne trouvez pas ?`,
+      `Je cherchais un coin tranquille près de l'étang…`,
+      `Attention aux arbres, ils ne s'écartent jamais !`,
+      `Vous me suivez à la trace ? 😄`,
+      `Je ne sais pas où je vais, mais j'y vais avec style.`,
+      `Allez, je vous laisse, j'ai encore un coin du parc à explorer !`
+    ];
+  }
+  function say(c) {
+    const all = lines(c);
+    let t, k = 0;
+    do { t = all[Math.floor(Math.random() * all.length)]; k++; } while (t === c.lastLine && k < 8);
+    c.lastLine = t; c.talkT = 6.5;
+    bubble.innerHTML = '<b></b><span></span>';
+    bubble.firstChild.textContent = c.name;
+    bubble.lastChild.textContent = t;
+  }
+  const _v = new THREE.Vector3();
+  function placeBubble() {
+    if (!selected || selected.state !== 'talk') { bubble.classList.remove('show'); return; }
+    _v.set(selected.x, 0, selected.z).project(camera);
+    const ppu = innerHeight / (view.halfH * 2);
+    const px = (_v.x + 1) / 2 * innerWidth, py = (1 - _v.y) / 2 * innerHeight - (0.95 * ppu + 12);
+    bubble.style.left = Math.max(120, Math.min(innerWidth - 120, px)) + 'px';
+    bubble.style.top = Math.max(bubble.offsetHeight + 12, py) + 'px';
+    bubble.classList.add('show');
+  }
+
   function select(c) {
+    if (selected && selected !== c && selected.state === 'talk') { selected.state = 'idle'; selected.timer = rnd(0.5, 2); }
     selected = c;
     ring.visible = !!c;
     $('info').hidden = !c;
-    if (!c) { state.follow = false; $('bFollow').textContent = '🎥 Suivre'; return; }
+    if (!c) { state.follow = false; $('bFollow').textContent = '🎥 Suivre'; bubble.classList.remove('show'); return; }
+    // il s'arrête et vous parle
+    c.state = 'talk'; c.vx *= 0.2; c.vz *= 0.2;
+    say(c);
     $('iName').textContent = c.name;
     $('iDot').style.background = '#' + c.shirt.toString(16).padStart(6, '0');
   }
@@ -576,11 +642,12 @@
       let walk = 0; for (const c of chars) if (c.state === 'walk') walk++;
       $('sTotal').textContent = chars.length; $('sWalk').textContent = walk; $('sIdle').textContent = chars.length - walk;
       if (selected) {
-        $('iState').textContent = selected.state === 'walk' ? 'Se promène' : 'S’arrête';
+        $('iState').textContent = selected.state === 'walk' ? 'Se promène' : selected.state === 'talk' ? 'Discute avec vous' : 'S’arrête';
         $('iSpeed').textContent = (Math.hypot(selected.vx, selected.vz)).toFixed(1) + ' m/s';
         $('iDist').textContent = selected.dist.toFixed(0) + ' m';
       }
     }
+    placeBubble();
     renderer.render(scene, camera);
   }
   frame();
