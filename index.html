@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Simulation de promeneurs – Three.js</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#1d2b22;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#eef3ee}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+  canvas.drag{cursor:grabbing}
+  .card{position:fixed;background:rgba(18,28,22,.78);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 16px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+  #panel{top:14px;left:14px;width:250px}
+  h1{font-size:17px;margin:0 0 2px;font-weight:650;letter-spacing:.2px}
+  .sub{margin:0 0 12px;font-size:12px;opacity:.65}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px}
+  .stats div{background:rgba(255,255,255,.07);border-radius:9px;padding:7px 4px;text-align:center}
+  .stats b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+  .stats span{font-size:10.5px;opacity:.65}
+  label{display:block;font-size:12.5px;margin:9px 0 2px}
+  label output{float:right;opacity:.75;font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:#7ed08a;margin:4px 0 0}
+  .chk{display:flex;align-items:center;gap:8px;cursor:pointer;margin:12px 0}
+  .chk input{accent-color:#7ed08a;width:16px;height:16px}
+  .row{display:flex;gap:8px}
+  button{flex:1;background:rgba(255,255,255,.1);color:inherit;border:1px solid rgba(255,255,255,.16);border-radius:9px;
+    padding:8px 6px;font:inherit;font-size:13px;cursor:pointer;transition:background .15s}
+  button:hover{background:rgba(255,255,255,.2)}
+  .hint{font-size:11px;opacity:.55;margin:12px 0 0;line-height:1.45}
+  #info{left:14px;bottom:14px;width:250px}
+  #info[hidden]{display:none}
+  #info h2{margin:0 0 8px;font-size:15px;display:flex;align-items:center;gap:8px}
+  #info h2 i{width:12px;height:12px;border-radius:50%;display:inline-block;border:2px solid rgba(255,255,255,.7)}
+  #info dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0 0 10px;font-size:12.5px}
+  #info dt{opacity:.6}
+  #info dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+  #zoom{right:14px;top:14px;display:flex;flex-direction:column;gap:6px;padding:8px}
+  #zoom button{width:36px;height:36px;padding:0;font-size:18px;flex:none}
+  #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px}
+  @media (max-width:600px){#panel,#info{width:210px}.hint{display:none}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="err">Impossible de charger Three.js (réseau bloqué ?). Rechargez la page.</div>
+
+<div id="panel" class="card">
+  <h1>Promeneurs</h1>
+  <p class="sub">Simulation Three.js · vue de dessus</p>
+  <div class="stats">
+    <div><b id="sTotal">0</b><span>présents</span></div>
+    <div><b id="sWalk">0</b><span>en marche</span></div>
+    <div><b id="sIdle">0</b><span>à l'arrêt</span></div>
+  </div>
+  <label>Population <output id="oPop">40</output></label>
+  <input type="range" id="rPop" min="1" max="150" value="40">
+  <label>Vitesse de simulation <output id="oSpd">×1</output></label>
+  <input type="range" id="rSpd" min="0.25" max="4" step="0.25" value="1">
+  <label class="chk"><input type="checkbox" id="cTrail"> Afficher les trajectoires</label>
+  <div class="row">
+    <button id="bPause">⏸ Pause</button>
+    <button id="bReset">↻ Recommencer</button>
+  </div>
+  <p class="hint">Molette : zoom · Glisser : déplacer la vue · Clic sur un personnage : le sélectionner</p>
+</div>
+
+<div id="info" class="card" hidden>
+  <h2><i id="iDot"></i><span id="iName">—</span></h2>
+  <dl>
+    <dt>État</dt><dd id="iState">—</dd>
+    <dt>Vitesse</dt><dd id="iSpeed">—</dd>
+    <dt>Distance parcourue</dt><dd id="iDist">—</dd>
+  </dl>
+  <div class="row">
+    <button id="bFollow">🎥 Suivre</button>
+    <button id="bClose">Fermer</button>
+  </div>
+</div>
+
+<div id="zoom" class="card">
+  <button id="zIn" title="Zoom avant">+</button>
+  <button id="zOut" title="Zoom arrière">−</button>
+  <button id="zHome" title="Recentrer">⌂</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  if (typeof THREE === 'undefined') { document.getElementById('err').style.display = 'flex'; return; }
+
+  /* ---------- Constantes monde ---------- */
+  const W = 80, H = 50;                 // taille du terrain (unités)
+  const $ = id => document.getElementById(id);
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+  /* ---------- Rendu / caméra (orthographique, vue de dessus) ---------- */
+  const canvas = $('c');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1d2b22);
+
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+  const view = { cx: 0, cz: 0, zoom: 1, halfW: 1, halfH: 1 };
+
+  function updateCamera() {
+    const aspect = innerWidth / innerHeight;
+    const baseW = aspect < 1 ? 26 : 46;
+    view.halfW = baseW / 2 / view.zoom;
+    view.halfH = view.halfW / aspect;
+    camera.left = -view.halfW; camera.right = view.halfW;
+    camera.top = view.halfH; camera.bottom = -view.halfH;
+    camera.up.set(0, 0, -1);
+    camera.position.set(view.cx, 60, view.cz);
+    camera.lookAt(view.cx, 0, view.cz);
+    camera.updateProjectionMatrix();
+  }
+  function resize() {
+    renderer.setSize(innerWidth, innerHeight, false);
+    updateCamera();
+  }
+  addEventListener('resize', resize);
+
+  function screenToWorld(px, py) {
+    const nx = (px / innerWidth) * 2 - 1, ny = 1 - (py / innerHeight) * 2;
+    return { x: view.cx + nx * view.halfW, z: view.cz - ny * view.halfH };
+  }
+
+  /* ---------- Lumières ---------- */
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x557755, 0.75));
+  const sun = new THREE.DirectionalLight(0xfff1d6, 0.75);
+  sun.position.set(-15, 40, 12);
+  scene.add(sun);
+
+  /* ---------- Décor ---------- */
+  const matCache = new Map();
+  function lambert(color) {
+    if (!matCache.has(color)) matCache.set(color, new THREE.MeshLambertMaterial({ color }));
+    return matCache.get(color);
+  }
+  function flat(geo, color, y) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
+    m.rotation.x = -Math.PI / 2; m.position.y = y; scene.add(m); return m;
+  }
+
+  // herbe en damier
+  (function ground() {
+    const tc = document.createElement('canvas'); tc.width = tc.height = 64;
+    const t = tc.getContext('2d');
+    t.fillStyle = '#5f9d50'; t.fillRect(0, 0, 64, 64);
+    t.fillStyle = '#5a9649'; t.fillRect(0, 0, 32, 32); t.fillRect(32, 32, 32, 32);
+    for (let i = 0; i < 160; i++) {
+      t.fillStyle = Math.random() < .5 ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.06)';
+      t.fillRect(Math.random() * 64, Math.random() * 64, 2, 2);
+    }
+    const tex = new THREE.CanvasTexture(tc);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(W / 4, H / 4);
+    tex.magFilter = THREE.NearestFilter;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex }));
+    m.rotation.x = -Math.PI / 2; scene.add(m);
+  })();
+
+  // chemins + place centrale
+  flat(new THREE.PlaneGeometry(W, 4), 0xd9c89b, 0.01);
+  flat(new THREE.PlaneGeometry(4, H), 0xd9c89b, 0.011);
+  flat(new THREE.CircleGeometry(9, 48), 0xe6dab6, 0.02);
+  flat(new THREE.RingGeometry(8.6, 9, 48), 0xc9b88a, 0.025);
+
+  // obstacles : cercles {t:'c'} et rectangles {t:'b'}
+  const obstacles = [];
+
+  // fontaine
+  flat(new THREE.CircleGeometry(3.4, 40), 0xbdbdbd, 0.03);
+  flat(new THREE.CircleGeometry(2.9, 40), 0x4aa8de, 0.04);
+  flat(new THREE.CircleGeometry(0.7, 20), 0xd5d5d5, 0.05);
+  obstacles.push({ t: 'c', x: 0, z: 0, r: 3.4 });
+
+  // étang
+  flat(new THREE.CircleGeometry(5.6, 40), 0xa89a78, 0.03);
+  flat(new THREE.CircleGeometry(5, 40), 0x3f95cf, 0.04);
+  const pond = flat(new THREE.CircleGeometry(2.2, 30), 0x58aee0, 0.05);
+  pond.position.x = -26; pond.position.z = 12;
+  scene.children[scene.children.length - 3].position.set(-26, 0.03, 12);
+  scene.children[scene.children.length - 2].position.set(-26, 0.04, 12);
+  obstacles.push({ t: 'c', x: -26, z: 12, r: 5.2 });
+
+  // bâtiments
+  [
+    { x: -24, z: -14, hw: 4.5, hd: 3.5, wall: 0xd8c7a6, roof: 0xb5503c },
+    { x: 25, z: -15, hw: 4, hd: 4, wall: 0xe3d5c0, roof: 0x4f6d8c },
+    { x: 26, z: 14, hw: 5, hd: 3, wall: 0xcfc3b0, roof: 0x7a5c48 },
+    { x: -10, z: 17, hw: 3.5, hd: 3.5, wall: 0xded0b0, roof: 0x8a4a5a }
+  ].forEach(b => {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(b.hw * 2, 3, b.hd * 2), lambert(b.wall));
+    wall.position.set(b.x, 1.5, b.z); scene.add(wall);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(b.hw * 2 + 0.5, 0.35, b.hd * 2 + 0.5), lambert(b.roof));
+    roof.position.set(b.x, 3.15, b.z); scene.add(roof);
+    const ridge = new THREE.Mesh(new THREE.BoxGeometry(b.hw * 2 + 0.5, 0.25, 0.3), lambert(0x000000));
+    ridge.material = new THREE.MeshLambertMaterial({ color: b.roof }); ridge.material.color.multiplyScalar(0.7);
+    ridge.position.set(b.x, 3.4, b.z); scene.add(ridge);
+    obstacles.push({ t: 'b', x: b.x, z: b.z, hw: b.hw + 0.25, hd: b.hd + 0.25 });
+  });
+
+  // clôture
+  [[0, -H / 2, W + 1, 0.5], [0, H / 2, W + 1, 0.5], [-W / 2, 0, 0.5, H], [W / 2, 0, 0.5, H]].forEach(f => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(f[2], 0.8, f[3]), lambert(0x7a5a3a));
+    m.position.set(f[0], 0.4, f[1]); scene.add(m);
+  });
+
+  // distance à la surface d'un obstacle (résultat dans S)
+  const S = { d: 0, nx: 0, nz: 0 };
+  function surf(o, x, z) {
+    if (o.t === 'c') {
+      let dx = x - o.x, dz = z - o.z, d = Math.hypot(dx, dz);
+      if (d < 1e-4) { dx = 1; dz = 0; d = 1; }
+      S.nx = dx / d; S.nz = dz / d; S.d = d - o.r;
+    } else {
+      const qx = Math.max(o.x - o.hw, Math.min(o.x + o.hw, x));
+      const qz = Math.max(o.z - o.hd, Math.min(o.z + o.hd, z));
+      const dx = x - qx, dz = z - qz, d = Math.hypot(dx, dz);
+      if (d < 1e-4) {
+        const px = o.hw - Math.abs(x - o.x), pz = o.hd - Math.abs(z - o.z);
+        if (px < pz) { S.nx = Math.sign(x - o.x) || 1; S.nz = 0; S.d = -px; }
+        else { S.nx = 0; S.nz = Math.sign(z - o.z) || 1; S.d = -pz; }
+      } else { S.nx = dx / d; S.nz = dz / d; S.d = d; }
+    }
+  }
+  function blocked(x, z, margin) {
+    for (const o of obstacles) { surf(o, x, z); if (S.d < margin) return true; }
+    return false;
+  }
+
+  // arbres
+  const treeGeo = new THREE.SphereGeometry(1, 14, 10);
+  const greens = [0x2f7d3a, 0x3b8f43, 0x276b33, 0x4a9a4a];
+  for (let n = 0, tries = 0; n < 32 && tries < 600; tries++) {
+    const x = rnd(-W / 2 + 2, W / 2 - 2), z = rnd(-H / 2 + 2, H / 2 - 2);
+    if (Math.abs(x) < 3.2 || Math.abs(z) < 3.2 || Math.hypot(x, z) < 11) continue;
+    if (blocked(x, z, 2.6)) continue;
+    const r = rnd(1.1, 1.7);
+    const crown = new THREE.Mesh(treeGeo, lambert(pick(greens)));
+    crown.scale.set(r, r * 0.75, r); crown.position.set(x, 2.2, z); scene.add(crown);
+    const hi = new THREE.Mesh(treeGeo, lambert(0x6bbf5e));
+    hi.scale.set(r * 0.45, r * 0.3, r * 0.45); hi.position.set(x - r * 0.25, 2.9, z - r * 0.25); scene.add(hi);
+    obstacles.push({ t: 'c', x, z, r: r * 0.85 });
+    n++;
+  }
+
+  // fleurs
+  (function flowers() {
+    const cnt = 420, geo = new THREE.CircleGeometry(0.13, 6); geo.rotateX(-Math.PI / 2);
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff }), cnt);
+    const cols = [0xffe066, 0xff8fb1, 0xffffff, 0xc59bff, 0xff9966];
+    const m4 = new THREE.Matrix4(), c = new THREE.Color();
+    for (let i = 0; i < cnt; i++) {
+      let x, z, k = 0;
+      do { x = rnd(-W / 2 + 1, W / 2 - 1); z = rnd(-H / 2 + 1, H / 2 - 1); k++; }
+      while ((blocked(x, z, 0.5) || Math.abs(x) < 2.2 || Math.abs(z) < 2.2 || Math.hypot(x, z) < 9.2) && k < 20);
+      m4.makeTranslation(x, 0.03, z); mesh.setMatrixAt(i, m4);
+      c.setHex(pick(cols)); mesh.setColorAt(i, c);
+    }
+    scene.add(mesh);
+  })();
+
+  /* ---------- Personnages ---------- */
+  const NAMES = ['Léa', 'Hugo', 'Camille', 'Louis', 'Inès', 'Jules', 'Manon', 'Léo', 'Chloé', 'Gabriel', 'Emma', 'Arthur',
+    'Jade', 'Raphaël', 'Alice', 'Lucas', 'Zoé', 'Adam', 'Louise', 'Nathan', 'Lina', 'Ethan', 'Anna', 'Paul', 'Sarah',
+    'Tom', 'Clara', 'Maël', 'Eva', 'Théo', 'Mila', 'Noé', 'Rose', 'Sacha', 'Lola', 'Victor', 'Margaux', 'Enzo', 'Juliette', 'Axel'];
+  const SHIRTS = [0xe74c3c, 0x3498db, 0xf1c40f, 0x9b59b6, 0x1abc9c, 0xe67e22, 0xec407a, 0xf5f5f5, 0x34495e, 0x8bc34a];
+  const SKINS = [0xf5d0b0, 0xe0ac82, 0xc68642, 0x8d5524, 0xffdbac];
+  const HAIRS = [0x2b1b10, 0x4a3020, 0x8a5a2b, 0xd9b25a, 0x111111, 0xb7410e, 0xcccccc];
+
+  const sphere = new THREE.SphereGeometry(1, 16, 12);
+  const hairGeo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2);
+  const footGeo = new THREE.BoxGeometry(0.15, 0.12, 0.26);
+  const shadowGeo = new THREE.CircleGeometry(0.5, 20); shadowGeo.rotateX(-Math.PI / 2);
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 });
+  const TRAIL_N = 70;
+
+  const chars = [];
+  let simTime = 0;
+
+  function mesh(geo, color) { return new THREE.Mesh(geo, lambert(color)); }
+
+  function spawnPoint() {
+    for (let k = 0; k < 40; k++) {
+      const x = rnd(-W / 2 + 2, W / 2 - 2), z = rnd(-H / 2 + 2, H / 2 - 2);
+      if (!blocked(x, z, 1)) return { x, z };
+    }
+    return { x: 0, z: 6 };
+  }
+
+  function createChar() {
+    const shirt = pick(SHIRTS), skin = pick(SKINS), hairC = pick(HAIRS);
+    const g = new THREE.Group();
+
+    const shadow = new THREE.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.02; g.add(shadow);
+    const shoulders = new THREE.Group(); shoulders.position.y = 0.5; g.add(shoulders);
+    const body = mesh(sphere, shirt); body.scale.set(0.34, 0.24, 0.2); shoulders.add(body);
+    const armL = mesh(sphere, shirt), armR = mesh(sphere, shirt);
+    armL.scale.set(0.075, 0.075, 0.13); armR.scale.copy(armL.scale);
+    armL.position.set(-0.4, 0, 0); armR.position.set(0.4, 0, 0);
+    const handL = mesh(sphere, skin), handR = mesh(sphere, skin);
+    handL.scale.setScalar(0.06); handR.scale.setScalar(0.06);
+    handL.position.set(0, 0, 0.13); handR.position.set(0, 0, 0.13);
+    armL.add(handL); armR.add(handR); shoulders.add(armL, armR);
+
+    const footL = mesh(footGeo, 0x2a2a2a), footR = mesh(footGeo, 0x2a2a2a);
+    footL.position.set(-0.1, 0.07, 0); footR.position.set(0.1, 0.07, 0); g.add(footL, footR);
+
+    const head = new THREE.Group(); head.position.y = 0.86; g.add(head);
+    const face = mesh(sphere, skin); face.scale.setScalar(0.19); head.add(face);
+    const hair = mesh(hairGeo, hairC); hair.scale.setScalar(0.215); hair.position.set(0, 0.012, -0.05); head.add(hair);
+    const nose = mesh(sphere, skin); nose.scale.setScalar(0.04); nose.position.set(0, -0.01, 0.19); head.add(nose);
+
+    scene.add(g);
+
+    // trajectoire
+    const pts = new Float32Array(TRAIL_N * 3);
+    const tg = new THREE.BufferGeometry();
+    tg.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+    const trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: shirt, transparent: true, opacity: 0.7 }));
+    trail.frustumCulled = false; trail.visible = state.trails; scene.add(trail);
+
+    const p = spawnPoint();
+    for (let i = 0; i < TRAIL_N; i++) { pts[i * 3] = p.x; pts[i * 3 + 1] = 0.06; pts[i * 3 + 2] = p.z; }
+
+    const c = {
+      g, shoulders, armL, armR, footL, footR, head, trail, pts, shirt,
+      name: pick(NAMES), x: p.x, z: p.z, vx: 0, vz: 0,
+      speed: rnd(1.1, 2.1), face: rnd(-Math.PI, Math.PI), phase: rnd(0, 6.28), seed: rnd(0, 100),
+      state: 'idle', timer: rnd(0, 2), tx: p.x, tz: p.z, dist: 0, sT: 0, lx: p.x, lz: p.z, trT: 0
+    };
+    chars.push(c);
+    return c;
+  }
+
+  function removeChar() {
+    const c = chars.pop(); if (!c) return;
+    if (selected === c) select(null);
+    scene.remove(c.g); scene.remove(c.trail); c.trail.geometry.dispose();
+  }
+
+  function setCount(n) {
+    while (chars.length < n) createChar();
+    while (chars.length > n) removeChar();
+  }
+
+  function pickTarget(c) {
+    for (let k = 0; k < 14; k++) {
+      let tx, tz;
+      if (Math.random() < 0.7) {
+        const a = c.face + (Math.random() - 0.5) * Math.PI * 1.3, d = rnd(5, 17);
+        tx = c.x + Math.sin(a) * d; tz = c.z + Math.cos(a) * d;
+      } else { tx = rnd(-W / 2 + 3, W / 2 - 3); tz = rnd(-H / 2 + 3, H / 2 - 3); }
+      if (Math.abs(tx) > W / 2 - 2 || Math.abs(tz) > H / 2 - 2) continue;
+      if (blocked(tx, tz, 1.2)) continue;
+      c.tx = tx; c.tz = tz; return;
+    }
+    c.tx = c.x * 0.3; c.tz = c.z * 0.3 + 6;
+  }
+
+  function angLerp(a, b, t) {
+    const d = (((b - a + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    return a + d * t;
+  }
+
+  const RAD = 0.4;
+
+  function stepChar(c, dt) {
+    let dx = 0, dz = 0;
+    if (c.state === 'walk') {
+      const toX = c.tx - c.x, toZ = c.tz - c.z, dist = Math.hypot(toX, toZ);
+      if (dist < 0.6) { c.state = 'idle'; c.timer = rnd(0.6, 4.5); }
+      else { dx = toX / dist; dz = toZ / dist; }
+    } else {
+      c.timer -= dt;
+      if (c.timer <= 0) { pickTarget(c); c.state = 'walk'; c.sT = 0; c.lx = c.x; c.lz = c.z; }
+    }
+
+    // évitement des obstacles
+    let sx = 0, sz = 0;
+    if (c.state === 'walk') {
+      for (const o of obstacles) {
+        surf(o, c.x, c.z);
+        if (S.d < 1.7) {
+          const w = 1 - Math.max(S.d, 0) / 1.7;
+          sx += S.nx * w * 1.4; sz += S.nz * w * 1.4;
+          let tX = -S.nz, tZ = S.nx;
+          if (tX * dx + tZ * dz < 0) { tX = -tX; tZ = -tZ; }
+          const into = -(S.nx * dx + S.nz * dz);
+          if (into > 0) { sx += tX * w * into * 2.4; sz += tZ * w * into * 2.4; }
+        }
+      }
+    }
+    // séparation entre personnages
+    for (const o of chars) {
+      if (o === c) continue;
+      const ax = c.x - o.x, az = c.z - o.z;
+      if (Math.abs(ax) > 1.2 || Math.abs(az) > 1.2) continue;
+      const d = Math.hypot(ax, az);
+      if (d < 1.15 && d > 1e-4) { const w = (1.15 - d) / 1.15; sx += ax / d * w * 1.6; sz += az / d * w * 1.6; }
+    }
+
+    let vx = (dx + sx) * c.speed, vz = (dz + sz) * c.speed;
+    const l = Math.hypot(vx, vz), max = c.speed * 1.25;
+    if (l > max) { vx *= max / l; vz *= max / l; }
+    const k = 1 - Math.exp(-dt * 5);
+    c.vx += (vx - c.vx) * k; c.vz += (vz - c.vz) * k;
+
+    const ox = c.x, oz = c.z;
+    c.x += c.vx * dt; c.z += c.vz * dt;
+    c.x = Math.max(-W / 2 + 1, Math.min(W / 2 - 1, c.x));
+    c.z = Math.max(-H / 2 + 1, Math.min(H / 2 - 1, c.z));
+    for (const o of obstacles) {
+      surf(o, c.x, c.z);
+      if (S.d < RAD) { c.x += S.nx * (RAD - S.d); c.z += S.nz * (RAD - S.d); }
+    }
+    c.dist += Math.hypot(c.x - ox, c.z - oz);
+
+    // bloqué ? on change de cap
+    if (c.state === 'walk') {
+      c.sT += dt;
+      if (c.sT > 2) {
+        if (Math.hypot(c.x - c.lx, c.z - c.lz) < 0.8) pickTarget(c);
+        c.lx = c.x; c.lz = c.z; c.sT = 0;
+      }
+    }
+
+    // orientation + animation
+    const sp = Math.hypot(c.vx, c.vz);
+    if (sp > 0.12) c.face = angLerp(c.face, Math.atan2(c.vx, c.vz), 1 - Math.exp(-dt * 8));
+    c.phase += sp * dt * 3.2;
+    const sw = Math.sin(c.phase), amp = Math.min(sp / 1.4, 1);
+    c.footL.position.z = sw * 0.24 * amp; c.footR.position.z = -sw * 0.24 * amp;
+    c.armL.position.z = -sw * 0.14 * amp; c.armR.position.z = sw * 0.14 * amp;
+    c.shoulders.rotation.y = sw * 0.14 * amp;
+    const look = c.state === 'idle' ? 0.8 : 0.12;
+    c.head.rotation.y = Math.sin(simTime * 0.9 + c.seed) * look + Math.sin(simTime * 2.3 + c.seed * 2) * 0.1 * look;
+    c.g.position.set(c.x, 0, c.z);
+    c.g.rotation.y = c.face;
+
+    // trajectoire
+    c.trT += dt;
+    if (c.trT > 0.12) {
+      c.trT = 0;
+      c.pts.copyWithin(3, 0, (TRAIL_N - 1) * 3);
+      c.pts[0] = c.x; c.pts[1] = 0.06; c.pts[2] = c.z;
+      c.trail.geometry.attributes.position.needsUpdate = true;
+    }
+  }
+
+  /* ---------- Interface ---------- */
+  const state = { paused: false, speed: 1, trails: false, follow: false };
+  let selected = null;
+
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.78, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05; ring.visible = false; scene.add(ring);
+
+  function select(c) {
+    selected = c;
+    ring.visible = !!c;
+    $('info').hidden = !c;
+    if (!c) { state.follow = false; $('bFollow').textContent = '🎥 Suivre'; return; }
+    $('iName').textContent = c.name;
+    $('iDot').style.background = '#' + c.shirt.toString(16).padStart(6, '0');
+  }
+
+  $('rPop').addEventListener('input', e => { $('oPop').textContent = e.target.value; setCount(+e.target.value); });
+  $('rSpd').addEventListener('input', e => { state.speed = +e.target.value; $('oSpd').textContent = '×' + state.speed; });
+  $('cTrail').addEventListener('change', e => { state.trails = e.target.checked; chars.forEach(c => c.trail.visible = state.trails); });
+  $('bPause').addEventListener('click', togglePause);
+  function togglePause() { state.paused = !state.paused; $('bPause').textContent = state.paused ? '▶ Reprendre' : '⏸ Pause'; }
+  $('bReset').addEventListener('click', () => { const n = chars.length; setCount(0); setCount(n); });
+  $('bFollow').addEventListener('click', () => {
+    state.follow = !state.follow; $('bFollow').textContent = state.follow ? '🎥 Ne plus suivre' : '🎥 Suivre';
+  });
+  $('bClose').addEventListener('click', () => select(null));
+  addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); togglePause(); } });
+
+  function zoomAt(factor, px, py) {
+    const before = screenToWorld(px, py);
+    view.zoom = Math.max(0.5, Math.min(5, view.zoom * factor));
+    updateCamera();
+    const after = screenToWorld(px, py);
+    view.cx += before.x - after.x; view.cz += before.z - after.z;
+    clampView(); updateCamera();
+  }
+  function clampView() {
+    view.cx = Math.max(-W / 2, Math.min(W / 2, view.cx));
+    view.cz = Math.max(-H / 2, Math.min(H / 2, view.cz));
+  }
+  $('zIn').addEventListener('click', () => zoomAt(1.25, innerWidth / 2, innerHeight / 2));
+  $('zOut').addEventListener('click', () => zoomAt(0.8, innerWidth / 2, innerHeight / 2));
+  $('zHome').addEventListener('click', () => { view.cx = 0; view.cz = 0; view.zoom = 1; state.follow = false; $('bFollow').textContent = '🎥 Suivre'; updateCamera(); });
+  canvas.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
+
+  // glisser pour déplacer / clic pour sélectionner / pincer pour zoomer
+  const pointers = new Map();
+  let drag = null, pinchD = 0;
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) drag = { sx: e.clientX, sy: e.clientY, moved: 0 };
+    if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinchD = Math.hypot(a.x - b.x, a.y - b.y); drag = null; }
+  });
+  canvas.addEventListener('pointermove', e => {
+    const p = pointers.get(e.pointerId); if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchD > 0) zoomAt(d / pinchD, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      pinchD = d; return;
+    }
+    if (drag) {
+      drag.moved += Math.abs(dx) + Math.abs(dy);
+      if (drag.moved > 5) {
+        canvas.classList.add('drag');
+        const upp = (view.halfH * 2) / innerHeight;
+        view.cx -= dx * upp; view.cz -= dy * upp;
+        clampView(); updateCamera();
+        if (state.follow) { state.follow = false; $('bFollow').textContent = '🎥 Suivre'; }
+      }
+    }
+  });
+  function endPointer(e) {
+    const wasClick = drag && drag.moved <= 5 && pointers.size === 1;
+    pointers.delete(e.pointerId); canvas.classList.remove('drag');
+    if (pointers.size < 2) pinchD = 0;
+    if (wasClick) {
+      const w = screenToWorld(e.clientX, e.clientY);
+      let best = null, bd = 1.3;
+      for (const c of chars) { const d = Math.hypot(c.x - w.x, c.z - w.z); if (d < bd) { bd = d; best = c; } }
+      select(best);
+    }
+    drag = null;
+  }
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+
+  /* ---------- Boucle ---------- */
+  setCount(40);
+  resize();
+  const clock = new THREE.Clock();
+  let uiT = 0;
+
+  function frame() {
+    requestAnimationFrame(frame);
+    const real = Math.min(clock.getDelta(), 0.05);
+    if (!state.paused) {
+      const dt = real * state.speed;
+      // sous-pas si la simulation est accélérée
+      const steps = Math.max(1, Math.ceil(dt / 0.034));
+      for (let s = 0; s < steps; s++) {
+        simTime += dt / steps;
+        for (const c of chars) stepChar(c, dt / steps);
+      }
+    }
+    if (selected) {
+      ring.position.x = selected.x; ring.position.z = selected.z;
+      ring.scale.setScalar(1 + Math.sin(performance.now() / 250) * 0.08);
+      if (state.follow) {
+        const k = 1 - Math.exp(-real * 4);
+        view.cx += (selected.x - view.cx) * k; view.cz += (selected.z - view.cz) * k;
+        updateCamera();
+      }
+    }
+    uiT += real;
+    if (uiT > 0.25) {
+      uiT = 0;
+      let walk = 0; for (const c of chars) if (c.state === 'walk') walk++;
+      $('sTotal').textContent = chars.length; $('sWalk').textContent = walk; $('sIdle').textContent = chars.length - walk;
+      if (selected) {
+        $('iState').textContent = selected.state === 'walk' ? 'Se promène' : 'S’arrête';
+        $('iSpeed').textContent = (Math.hypot(selected.vx, selected.vz)).toFixed(1) + ' m/s';
+        $('iDist').textContent = selected.dist.toFixed(0) + ' m';
+      }
+    }
+    renderer.render(scene, camera);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>
