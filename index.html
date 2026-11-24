@@ -69,7 +69,7 @@
     <button id="bPause">⏸ Pause</button>
     <button id="bReset">↻ Recommencer</button>
   </div>
-  <p class="hint">Molette : zoom · Glisser : déplacer la vue · Clic sur un personnage : il s'arrête et vous parle</p>
+  <p class="hint">Molette : zoom · Glisser : déplacer la vue · Clic sur un personnage : il s'arrête, vous parle et la caméra le suit · Clic à côté ou « Fermer » : on le lâche</p>
 </div>
 
 <div id="info" class="card" hidden>
@@ -80,7 +80,6 @@
     <dt>Distance parcourue</dt><dd id="iDist">—</dd>
   </dl>
   <div class="row">
-    <button id="bFollow">🎥 Suivre</button>
     <button id="bClose">Fermer</button>
   </div>
 </div>
@@ -524,11 +523,12 @@
   }
 
   function select(c) {
-    if (selected && selected !== c && selected.state === 'talk') { selected.state = 'idle'; selected.timer = rnd(0.5, 2); }
+    if (selected && selected !== c && selected.state === 'talk') { selected.state = 'idle'; selected.timer = 1; }
     selected = c;
     ring.visible = !!c;
     $('info').hidden = !c;
-    if (!c) { state.follow = false; $('bFollow').textContent = '🎥 Suivre'; bubble.classList.remove('show'); return; }
+    if (!c) { state.follow = false; bubble.classList.remove('show'); return; }
+    state.follow = true;   // la caméra suit automatiquement le personnage sélectionné
     // il s'arrête et vous parle
     c.state = 'talk'; c.vx *= 0.2; c.vz *= 0.2;
     say(c);
@@ -542,9 +542,6 @@
   $('bPause').addEventListener('click', togglePause);
   function togglePause() { state.paused = !state.paused; $('bPause').textContent = state.paused ? '▶ Reprendre' : '⏸ Pause'; }
   $('bReset').addEventListener('click', () => { const n = chars.length; setCount(0); setCount(n); });
-  $('bFollow').addEventListener('click', () => {
-    state.follow = !state.follow; $('bFollow').textContent = state.follow ? '🎥 Ne plus suivre' : '🎥 Suivre';
-  });
   $('bClose').addEventListener('click', () => select(null));
   addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); togglePause(); } });
 
@@ -562,7 +559,7 @@
   }
   $('zIn').addEventListener('click', () => zoomAt(1.25, innerWidth / 2, innerHeight / 2));
   $('zOut').addEventListener('click', () => zoomAt(0.8, innerWidth / 2, innerHeight / 2));
-  $('zHome').addEventListener('click', () => { view.cx = 0; view.cz = 0; view.zoom = 1; state.follow = false; $('bFollow').textContent = '🎥 Suivre'; updateCamera(); });
+  $('zHome').addEventListener('click', () => { view.cx = 0; view.cz = 0; view.zoom = 1; select(null); updateCamera(); });
   canvas.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY); }, { passive: false });
 
   // glisser pour déplacer / clic pour sélectionner / pincer pour zoomer
@@ -585,12 +582,11 @@
     }
     if (drag) {
       drag.moved += Math.abs(dx) + Math.abs(dy);
-      if (drag.moved > 5) {
+      if (drag.moved > 5 && !state.follow) {   // vue verrouillée pendant le suivi
         canvas.classList.add('drag');
         const upp = (view.halfH * 2) / innerHeight;
         view.cx -= dx * upp; view.cz -= dy * upp;
         clampView(); updateCamera();
-        if (state.follow) { state.follow = false; $('bFollow').textContent = '🎥 Suivre'; }
       }
     }
   });
