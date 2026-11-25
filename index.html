@@ -11,7 +11,9 @@
   canvas.drag{cursor:grabbing}
   .card{position:fixed;background:rgba(18,28,22,.78);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
     border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 16px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
-  #panel{top:14px;left:14px;width:250px}
+  #panel{top:14px;left:14px;width:250px;max-height:calc(100vh - 28px);overflow-y:auto}
+  .presets{margin-top:8px}
+  .presets button{font-size:16px;padding:6px 0}
   h1{font-size:17px;margin:0 0 2px;font-weight:650;letter-spacing:.2px}
   .sub{margin:0 0 12px;font-size:12px;opacity:.65}
   .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px}
@@ -74,7 +76,16 @@
   <input type="range" id="rPop" min="1" max="150" value="40">
   <label>Vitesse de simulation <output id="oSpd">×1</output></label>
   <input type="range" id="rSpd" min="0.25" max="4" step="0.25" value="1">
-  <label class="chk"><input type="checkbox" id="cTrail"> Afficher les trajectoires</label>
+  <label>Moment de la journée <output id="oTime">14:00 ☀️</output></label>
+  <input type="range" id="rTime" min="0" max="24" step="0.05" value="14">
+  <div class="row presets">
+    <button data-h="7.5" title="Matin">🌅</button>
+    <button data-h="12.5" title="Midi">☀️</button>
+    <button data-h="19" title="Soir">🌇</button>
+    <button data-h="23.5" title="Nuit">🌙</button>
+  </div>
+  <label class="chk"><input type="checkbox" id="cAuto"> Cycle jour / nuit automatique</label>
+  <label class="chk" style="margin-top:0"><input type="checkbox" id="cTrail"> Afficher les trajectoires</label>
   <div class="row">
     <button id="bPause">⏸ Pause</button>
     <button id="bReset">↻ Recommencer</button>
@@ -148,9 +159,10 @@
   }
 
   /* ---------- Lumières ---------- */
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x557755, 0.75));
-  const sun = new THREE.DirectionalLight(0xfff1d6, 0.75);
-  sun.position.set(-15, 40, 12);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x557755, 0.55);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xfff1d6, 0.5);   // soleil le jour, lune la nuit
+  sun.position.set(-8, 48, 8);
   scene.add(sun);
 
   /* ---------- Décor ---------- */
@@ -160,7 +172,7 @@
     return matCache.get(color);
   }
   function flat(geo, color, y) {
-    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
+    const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
     m.rotation.x = -Math.PI / 2; m.position.y = y; scene.add(m); return m;
   }
 
@@ -178,7 +190,7 @@
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(W / 4, H / 4);
     tex.magFilter = THREE.NearestFilter;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex }));
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshLambertMaterial({ map: tex }));
     m.rotation.x = -Math.PI / 2; scene.add(m);
   })();
 
@@ -252,6 +264,56 @@
     return false;
   }
 
+  // lampadaires (allumés la nuit)
+  const lampHeadMat = new THREE.MeshBasicMaterial({ color: 0x777777 });
+  const lamps = [];
+  [[-30, 2.7], [-18, -2.7], [18, 2.7], [30, -2.7], [2.7, -18], [-2.7, -18], [2.7, 18], [-2.7, 18]].forEach(([x, z]) => {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 3.1, 8), lambert(0x3a3d44));
+    pole.position.set(x, 1.55, z); scene.add(pole);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 14, 10), lampHeadMat);
+    head.position.set(x, 3.2, z); scene.add(head);
+    const light = new THREE.PointLight(0xffd9a0, 0, 15, 1.4);
+    light.position.set(x, 3.4, z); scene.add(light);
+    lamps.push(light);
+    obstacles.push({ t: 'c', x, z, r: 0.3 });
+  });
+
+  // moments de la journée : h = heure (0–24), couleurs et intensités interpolées
+  const KEYS = [
+    { h: 0,    bg: 0x070b18, sky: 0x3a4f8a, gnd: 0x10121e, hi: 0.24, sc: 0x8fa8ff, si: 0.32, sp: [20, 40, -15], lamp: 1 },
+    { h: 5,    bg: 0x0d1424, sky: 0x3d5290, gnd: 0x12151f, hi: 0.26, sc: 0x8fa8ff, si: 0.32, sp: [20, 40, -15], lamp: 1 },
+    { h: 6.5,  bg: 0x5a4a58, sky: 0xffc9a0, gnd: 0x5a6a4a, hi: 0.42, sc: 0xffb070, si: 0.5,  sp: [-40, 14, 10], lamp: 0.45 },
+    { h: 8,    bg: 0x2e4a38, sky: 0xfff4e0, gnd: 0x7aa070, hi: 0.5,  sc: 0xfff1d6, si: 0.55, sp: [-30, 30, 12], lamp: 0 },
+    { h: 12.5, bg: 0x2e4a38, sky: 0xffffff, gnd: 0x88aa77, hi: 0.55, sc: 0xffffff, si: 0.5,  sp: [-8, 48, 8],   lamp: 0 },
+    { h: 17,   bg: 0x2e4a38, sky: 0xfff0d8, gnd: 0x7aa070, hi: 0.5,  sc: 0xffe0b0, si: 0.6,  sp: [30, 30, 10],  lamp: 0 },
+    { h: 19,   bg: 0x4a3040, sky: 0xff9a66, gnd: 0x4a4a55, hi: 0.38, sc: 0xff7a40, si: 0.6,  sp: [40, 12, 10],  lamp: 0.5 },
+    { h: 20.5, bg: 0x1a1a30, sky: 0x6070b0, gnd: 0x1a1c2a, hi: 0.28, sc: 0x8fa8ff, si: 0.32, sp: [20, 40, -15], lamp: 1 },
+    { h: 24,   bg: 0x070b18, sky: 0x3a4f8a, gnd: 0x10121e, hi: 0.24, sc: 0x8fa8ff, si: 0.32, sp: [20, 40, -15], lamp: 1 }
+  ];
+  const _c1 = new THREE.Color(), _c2 = new THREE.Color();
+  const lampOff = new THREE.Color(0x777777), lampOn = new THREE.Color(0xffe6a8);
+  const mix = (a, b, t) => a + (b - a) * t;
+  function applyTime(hour) {
+    const h = ((hour % 24) + 24) % 24;
+    let i = 0; while (i < KEYS.length - 2 && h >= KEYS[i + 1].h) i++;
+    const a = KEYS[i], b = KEYS[i + 1], t = (h - a.h) / (b.h - a.h);
+    scene.background.set(a.bg).lerp(_c2.set(b.bg), t);
+    hemi.color.set(a.sky).lerp(_c2.set(b.sky), t);
+    hemi.groundColor.set(a.gnd).lerp(_c2.set(b.gnd), t);
+    hemi.intensity = mix(a.hi, b.hi, t);
+    sun.color.set(a.sc).lerp(_c2.set(b.sc), t);
+    sun.intensity = mix(a.si, b.si, t);
+    sun.position.set(mix(a.sp[0], b.sp[0], t), mix(a.sp[1], b.sp[1], t), mix(a.sp[2], b.sp[2], t));
+    const L = mix(a.lamp, b.lamp, t);
+    lamps.forEach(l => { l.intensity = L * 1.5; });
+    lampHeadMat.color.copy(lampOff).lerp(lampOn, L);
+  }
+  function timeLabel(hour) {
+    const h = ((hour % 24) + 24) % 24, hh = Math.floor(h), mm = Math.floor((h - hh) * 60 / 5) * 5;
+    const icon = h < 5.5 || h >= 20.5 ? '🌙' : h < 8 ? '🌅' : h < 17 ? '☀️' : '🌇';
+    return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ' ' + icon;
+  }
+
   // arbres
   const treeGeo = new THREE.SphereGeometry(1, 14, 10);
   const greens = [0x2f7d3a, 0x3b8f43, 0x276b33, 0x4a9a4a];
@@ -271,7 +333,7 @@
   // fleurs
   (function flowers() {
     const cnt = 420, geo = new THREE.CircleGeometry(0.13, 6); geo.rotateX(-Math.PI / 2);
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff }), cnt);
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff }), cnt);
     const cols = [0xffe066, 0xff8fb1, 0xffffff, 0xc59bff, 0xff9966];
     const m4 = new THREE.Matrix4(), c = new THREE.Color();
     for (let i = 0; i < cnt; i++) {
@@ -488,7 +550,7 @@
   }
 
   /* ---------- Interface ---------- */
-  const state = { paused: false, speed: 1, trails: false, follow: false };
+  const state = { paused: false, speed: 1, trails: false, follow: false, hour: 14, auto: false };
   let selected = null;
 
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.78, 32),
@@ -550,6 +612,15 @@
   }
 
   $('rPop').addEventListener('input', e => { $('oPop').textContent = e.target.value; setCount(+e.target.value); });
+  function setHour(h, fromSlider) {
+    state.hour = ((h % 24) + 24) % 24;
+    applyTime(state.hour);
+    $('oTime').textContent = timeLabel(state.hour);
+    if (!fromSlider) $('rTime').value = state.hour;
+  }
+  $('rTime').addEventListener('input', e => setHour(+e.target.value, true));
+  document.querySelectorAll('.presets button').forEach(b => b.addEventListener('click', () => setHour(+b.dataset.h)));
+  $('cAuto').addEventListener('change', e => { state.auto = e.target.checked; });
   $('rSpd').addEventListener('input', e => { state.speed = +e.target.value; $('oSpd').textContent = '×' + state.speed; });
   $('cTrail').addEventListener('change', e => { state.trails = e.target.checked; chars.forEach(c => c.trail.visible = state.trails); });
   $('bPause').addEventListener('click', togglePause);
@@ -635,6 +706,7 @@
 
   /* ---------- Boucle ---------- */
   setCount(40);
+  setHour(state.hour);
   resize();
   const clock = new THREE.Clock();
   let uiT = 0;
@@ -671,6 +743,7 @@
         $('iDist').textContent = selected.dist.toFixed(0) + ' m';
       }
     }
+    if (state.auto && !state.paused) setHour(state.hour + real * state.speed * 0.2);   // 24 h en ~2 min
     placeBubble();
     renderer.render(scene, camera);
   }
